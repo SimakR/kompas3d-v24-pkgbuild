@@ -7,6 +7,7 @@ pkgdesc='Proprietary russian CAD system'
 url='https://sd.ascon.ru/otrs/customer.pl?Action=CustomerK3DBetaTesting'
 license=('custom')
 depends=('libc++' 'libunwind')
+makedepends=('patchelf')
 install=${pkgname}.install
 
 source=( "https://repo.ascon.ru/beta/deb/pool/main/a/ascon-kompas-common-v24/ascon-kompas-common-v24_24.1.0.64_amd64.deb"
