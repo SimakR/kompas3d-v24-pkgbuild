@@ -1,0 +1,234 @@
+pre_install(){
+#grdcontrol
+if [ -f /etc/systemd/system/grdcontrol.service ]; then
+    # disable on boot
+    systemctl -q disable --now grdcontrol.service
+    # remove systemd config symbolic link
+    unlink /etc/systemd/system/grdcontrol.service
+fi
+}
+
+post_install(){
+#ascon-kompas-common-v24
+echo "Обновляем базу данных с MIME-типами"
+update-mime-database /usr/share/mime
+
+#ascon-kompas-fonts
+#Need to update fonts list after package installation
+echo "Добавляем шрифты для Kompas-3D"
+fc-cache -f -v
+
+#ascon-kompas-graphic
+#Processing symlinks for kompas-master and other kompas packages
+localBinFolder=/usr/bin
+kompasBinElf=/opt/ascon/kompas3d-v24/Bin/kKompas
+kActivationBinElf=/opt/ascon/kompas3d-v24/License/kactivation
+#Arguments from makeKompasDeb.sh
+packageType=v24
+linkName=kompas-v24
+kompasVersion=24.1.0.64
+schema=release
+kompasGroup=ascon-kompas
+kompasConfigDir=/etc/ascon/KOMPAS-3D/24/
+
+#Adding ascon-kompas group to work with config
+if grep  $kompasGroup /etc/group
+then
+	echo "Группа $kompasGroup  с повышенными правами на запись доступна для работы"
+else
+	groupadd $kompasGroup
+fi
+
+#Ascon-kompas-config to run kKompas without script
+ln -fs $kompasBinElf usr/bin/kompas-v24
+echo "Команда для запуска КОМПАС-3D:  kompas-v24"
+
+if [ "$schema" = "release" ]; then
+	echo "Команда для запуска Утилиты Активации: kompas-kactivation-v24"
+	ln -fs $kActivationBinElf usr/bin/kompas-kactivation-v24
+	chgrp -R $kompasGroup $kompasConfigDir
+	chmod -R 775 $kompasConfigDir
+	echo "Директория $kompasConfigDir доступна для записи для пользователей группы: $kompasGroup "
+fi
+
+#Locale for Cyrilic symbols
+HasRuLocale=$( locale -a | grep ru_RU.cp1251 )
+if [ -z "$HasRuLocale" ]; then
+	ruLocale=ru_RU.CP1251
+	localeGen=/etc/locale.gen
+
+	#Searching for ruLocale on locale.gen
+	ruLocaleResult=$( grep "$ruLocale" $localeGen )
+	if [ -n "$ruLocaleResult" ]; then
+		sed -i "s/# $ruLocale/$ruLocale/g"  $localeGen
+	else
+		echo "$ruLocale не найдена $localeGen, добавляем"
+		echo "$ruLocale CP1251" >> /etc/locale.gen
+	fi
+	locale-gen
+fi
+
+update-desktop-database /usr/share/applications
+#ascon-kompas-help-v24
+#Creating group with advanced permissions
+helpServerDir=/etc/ascon/HelpServer/
+kompasGroup=ascon-kompas
+
+chgrp -R $kompasGroup $helpServerDir
+chmod -R 775 $helpServerDir
+echo "Директория $helpServerDir доступна для редактирования пользователям группы ascon-kompas"
+
+#ascon-kompas-sdk-v24
+#Environment variable for all users
+envKompasSdk="export KOMPAS_SDK=/opt/ascon/kompas3d-v24/SDK/"
+profileFile=/etc/profile.d/ascon-kompas-sdk.sh
+if [ -f $profileFile ]
+then
+    if  grep -q "$envKompasSdk" $profileFile;
+    then
+	    echo "Переменная  KOMPAS_SDK уже существует"
+    else
+	    echo "Добавляем переменную окружения KOMPAS_SDK в $profileFile. Требуется перезагрузка"
+	    echo $envKompasSdk >> $profileFile
+    fi
+else
+    echo $envKompasSdk > $profileFile
+    echo "Добавляем переменную окружения KOMPAS_SDK в $profileFile. Требуется перезагрузка"
+fi
+
+#ascon-kompas3d-v24
+#Link with PolynomLib
+polynomLibDir=/opt/ascon/PolynomLibrary
+
+if [ -d $polynomLibDir ]; then
+	ln -sfn $polynomLibDir /opt/ascon/kompas3d-v24/Libs
+	echo "Создаем ссылку на библиотеку моделей Полином: $polynomLibDir "
+fi
+
+#ascon-polynom-library
+chgrp -R $kompasGroup /opt/ascon/PolynomLibrary
+chmod -R 775 /opt/ascon/PolynomLibrary
+
+if [ ! $(grep '^ASCON_INSTALL_PATH=' /etc/environment) ]
+then
+    echo "Установка переменной окружения ASCON_INSTALL_PATH..."
+    echo "ASCON_INSTALL_PATH=/opt/ascon" >> /etc/environment
+else
+    echo "Переменная окружения ASCON_INSTALL_PATH уже установлена."
+fi
+
+for kompas_path in $(ls /opt/ascon/ | grep -P '\bkompas3d-v\d+.*\b')
+do
+if [ ! -h /opt/ascon/$kompas_path/Libs/PolynomLibrary ]
+then
+echo "Создание ссылки /opt/ascon/$kompas_path/Libs/PolynomLibrary"
+ln -s /opt/ascon/PolynomLibrary /opt/ascon/$kompas_path/Libs/PolynomLibrary
+fi
+done
+
+#grdcontrol
+# copy udev rules
+cp -rf /opt/guardant/grdcontrol/95-grdnt.rules /etc/udev/rules.d
+
+# reload udev
+udevadm control --reload-rules
+udevadm trigger --subsystem-match=usb --action=add
+
+# check systemd loaded
+if ps -C systemd | grep -q '^ *1 ' ;then
+
+# make systemd config symbolic link
+ln -sf /opt/guardant/grdcontrol/grdcontrol.service /etc/systemd/system/grdcontrol.service
+# start service enable on boot
+systemctl -q enable --now grdcontrol.service
+fi
+
+ln -sf /opt/guardant/grdcontrol/license_wizard       /usr/bin/license_wizard
+}
+
+
+pre_remove(){
+#ascon-kompas-common-v24
+#Need to ensure that any Kompas instance doesnt exist
+
+linkName=kompas-v24
+if pgrep  $linkName
+then
+	echo "Для корректного завершения работы КОМПАС-3D необходимо закрыть все открытые окна программы, чтобы гарантировать, что все данные сохранены и процессы завершены." > /dev/tty
+	if exec </dev/tty ;
+	then
+		printf "%s Нажмите любую клавишу для продолжения."
+		read an1s
+	fi
+fi
+
+#ascon-kompas3d-v24
+polynomLibsLink=/opt/ascon/kompas3d-v24/Libs/PolynomLibrary
+polynomLibDir=/opt/ascon/PolynomLibrary
+
+if [ -L  $polynomLibsLink ]
+then
+	unlink $polynomLibsLink
+    echo "Удаляем ссылку на библиотеку моделей Полином: $polynomLibDir "
+fi
+
+##grdcontrol
+if [ -f /etc/systemd/system/grdcontrol.service ]; then
+    # disable on boot
+    systemctl -q disable --now grdcontrol.service
+    # stop service
+    systemctl -q stop grdcontrol.service
+    # remove systemd config symbolic link
+    rm -rf /etc/systemd/system/grdcontrol.service
+fi
+
+rm /usr/bin/license_wizard
+
+}
+
+post_remove(){
+#ascon-kompas-common-v24
+echo "Удаляем файлы MIME типов для  КОМПАС-3D и  КОМПАС-3D Viewer"
+update-mime-database /usr/share/mime
+
+#ascon-kompas-fonts
+#Need to update fonts list after package removal
+fc-cache -f -v
+
+#ascon-kompas-graphic
+#Restoring system directories on case of complete Kompas removal
+localBinFolder=/usr/bin
+kompasOptFolder=/opt/ascon
+#Arguments from makeKompasDeb.sh
+kompasVersion=24.1.0.64
+packageType=v24
+schema=release
+kompasGroup=ascon-kompas
+
+#Check if there is any kompas binary folder - cleanup global thing
+if [ -d  "/opt/ascon/" ] && [ -z "$( ls -A '/opt/ascon/' )" ];
+then
+	update-desktop-database /usr/share/applications
+fi
+
+if [ ! -d /opt ]
+then
+	mkdir /opt
+fi
+#Removing ascon-kompas
+if grep  $kompasGroup /etc/group
+then
+	groupdel -f $kompasGroup
+fi
+
+#ascon-kompas-sdk-v24
+#Environment variable for all users
+profileFile=/etc/profile.d/ascon-kompas-sdk.sh
+if [ ! -d /opt/ascon/kompas3d-v24/SDK ]
+then
+    sed -i '/KOMPAS_SDK/d' $profileFile
+    echo "Переменная окружения KOMPAS_SDK удалена. Требуется перезагрузка"
+fi
+
+if [ ! -d /opt/ascon/kompas3d-v24/ ];then rm -f $profileFile; fi
+}
